@@ -1,14 +1,15 @@
--- xp;scripts - integrated with AppleLibrary UI
+-- xp;scripts - integrated with WindUI (replaces AppleLibrary)
 -- Ultimate Enhanced ESP + Aimbot (mobile-friendly) — English
 -- Notes:
---  * This version fixes a few bugs (scope issues, accidental 'continue', math.clamp usage,
---    local variable scoping for box sizes) and removes the in-script CoreGui UI so the
---    controls are exposed via the external AppleLibrary UI provided at:
---    https://github.com/GoHamza/AppleLibrary (loaded at runtime).
---  * All state toggles / numeric inputs are bound to the UI, and settings are saved.
---  * If the AppleLibrary can't be fetched or an API isn't available (Drawing/Highlight/writefile),
---    the script gracefully falls back to available features.
---  * To change default hotkeys or controls, edit the CONFIG table below.
+--  * Replaced usage of AppleLibrary with an embedded minimal WindUI-compatible shim.
+--  * The shim provides the small subset of UI controls used by this script:
+--      - Window:init equivalent via WindUI.init
+--      - window:Divider, window:Section, Section:Switch, Section:TextField, Section:Button, Section:Label
+--      - window:GreenButton, window:TempNotify
+--  * The embedded WindUI shim is intentionally lightweight and self-contained so the script
+--    doesn't fail when an external UI can't be fetched. If you prefer an external WindUI,
+--    you can replace the shim with a proper library and keep the same API used below.
+--  * All state toggles / numeric inputs remain bound to the UI, and settings are saved.
 
 -- ====== Services & Locals ======
 local Players = game:GetService("Players")
@@ -488,7 +489,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
     if input.UserInputType == Enum.UserInputType.Keyboard then
         local kc = input.KeyCode
         if kc == CONFIG.hotkeys.toggleUI then
-            -- Toggle visibility is managed by external UI (AppleLibrary). We still toggle state flag.
+            -- Toggle visibility is managed by external UI (WindUI). We still toggle state flag.
             state.uiVisible = not state.uiVisible
             saveSettings()
         elseif kc == CONFIG.hotkeys.toggleESP then
@@ -537,11 +538,188 @@ local function notify_local(text, duration)
     end
 end
 
--- Try to load AppleLibrary UI and bind controls
-local library_ok, library = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/GoHamza/AppleLibrary/blob/main/main.lua?raw=true"))()
-end)
+-- ======= Minimal WindUI shim (embedded) =======
+-- This provides the small API surface used by the script so we can switch to WindUI-like naming.
+-- If you prefer to use an external WindUI library, replace this block with a proper loader and keep the same API.
 
+local function createText(parent, props)
+    local label = Instance.new("TextLabel")
+    label.Size = props.Size or UDim2.new(1,0,0,20)
+    label.Position = props.Position or UDim2.new(0,0,0,0)
+    label.BackgroundTransparency = props.BackgroundTransparency or 1
+    label.Text = props.Text or ""
+    label.TextColor3 = props.TextColor3 or Color3.fromRGB(230,230,230)
+    label.Font = props.Font or Enum.Font.Gotham
+    label.TextSize = props.TextSize or 14
+    label.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
+    label.Parent = parent
+    return label
+end
+
+local WindUI = {}
+function WindUI.init(title, resizable, toggleKey, small)
+    -- create a simple window frame inside a ScreenGui
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = (title or "WindUI") .. "_UI"
+    if canProtectGUI and syn and syn.protect_gui then
+        pcall(syn.protect_gui, screenGui)
+    end
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = game.CoreGui
+
+    local window = Instance.new("Frame", screenGui)
+    window.Size = UDim2.new(0,380,0,520)
+    window.Position = UDim2.new(0,20,0,20)
+    window.BackgroundColor3 = Color3.fromRGB(28,28,28)
+    window.BorderSizePixel = 0
+    window.Name = "Window"
+
+    local uiCorner = Instance.new("UICorner", window); uiCorner.CornerRadius = UDim.new(0,8)
+
+    local titleLabel = createText(window, {Size = UDim2.new(1,0,0,28), Position = UDim2.new(0,12,0,6), Text = title or "WindUI", Font = Enum.Font.GothamSemibold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
+    titleLabel.TextColor3 = Color3.fromRGB(255,255,255)
+    titleLabel.BackgroundTransparency = 1
+
+    local content = Instance.new("Frame", window)
+    content.Size = UDim2.new(1,-24,1,-44)
+    content.Position = UDim2.new(0,12,0,36)
+    content.BackgroundTransparency = 1
+    content.Name = "Content"
+
+    local layout = Instance.new("UIListLayout", content)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0,8)
+
+    local windowAPI = {}
+    windowAPI._screen = screenGui
+    windowAPI._window = window
+    windowAPI._content = content
+
+    function windowAPI:Divider(text)
+        local divider = Instance.new("Frame", content)
+        divider.Size = UDim2.new(1,0,0,18)
+        divider.BackgroundTransparency = 1
+        divider.LayoutOrder = #content:GetChildren()
+        local lbl = createText(divider, {Size=UDim2.new(1,0,1,0), Position=UDim2.new(0,0,0,0), Text = text or "", Font = Enum.Font.GothamSemibold, TextSize = 13})
+        lbl.TextColor3 = Color3.fromRGB(200,200,200)
+        return divider
+    end
+
+    function windowAPI:Section(name)
+        local sectionFrame = Instance.new("Frame", content)
+        sectionFrame.Size = UDim2.new(1,0,0,80)
+        sectionFrame.BackgroundTransparency = 1
+        sectionFrame.LayoutOrder = #content:GetChildren()
+        local header = createText(sectionFrame, {Size = UDim2.new(1,0,0,18), Position = UDim2.new(0,0,0,0), Text = name or "Section", Font = Enum.Font.GothamSemibold, TextSize = 14})
+        header.TextColor3 = Color3.fromRGB(220,220,220)
+
+        local items = Instance.new("Frame", sectionFrame)
+        items.Size = UDim2.new(1,0,1,-20)
+        items.Position = UDim2.new(0,0,0,20)
+        items.BackgroundTransparency = 1
+
+        local ilayout = Instance.new("UIListLayout", items)
+        ilayout.SortOrder = Enum.SortOrder.LayoutOrder
+        ilayout.Padding = UDim.new(0,6)
+
+        local sectionAPI = {}
+
+        function sectionAPI:Switch(label, initial, callback)
+            local holder = Instance.new("Frame", items)
+            holder.Size = UDim2.new(1,0,0,26)
+            holder.BackgroundTransparency = 1
+            local lbl = createText(holder, {Size = UDim2.new(0.75,0,1,0), Position = UDim2.new(0,0,0,0), Text = label or "", Font = Enum.Font.Gotham, TextSize = 14})
+            lbl.TextColor3 = Color3.fromRGB(220,220,220)
+            local btn = Instance.new("TextButton", holder)
+            btn.Size = UDim2.new(0.22,0,0.8,0)
+            btn.Position = UDim2.new(0.76,0,0.1,0)
+            btn.Text = initial and "On" or "Off"
+            btn.BackgroundColor3 = initial and Color3.fromRGB(80,200,120) or Color3.fromRGB(80,80,80)
+            btn.TextColor3 = Color3.fromRGB(20,20,20)
+            btn.AutoButtonColor = true
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 14
+            btn.MouseButton1Click:Connect(function()
+                local new = not initial
+                initial = new
+                btn.Text = new and "On" or "Off"
+                btn.BackgroundColor3 = new and Color3.fromRGB(80,200,120) or Color3.fromRGB(80,80,80)
+                pcall(function() callback(new) end)
+            end)
+            return btn
+        end
+
+        function sectionAPI:TextField(label, initialText, callback)
+            local holder = Instance.new("Frame", items)
+            holder.Size = UDim2.new(1,0,0,28)
+            holder.BackgroundTransparency = 1
+            local lbl = createText(holder, {Size = UDim2.new(0.46,0,1,0), Position = UDim2.new(0,0,0,0), Text = label or "", Font = Enum.Font.Gotham, TextSize = 13})
+            lbl.TextColor3 = Color3.fromRGB(210,210,210)
+            local box = Instance.new("TextBox", holder)
+            box.Size = UDim2.new(0.52,0,1,0)
+            box.Position = UDim2.new(0.48,0,0,0)
+            box.Text = initialText or ""
+            box.ClearTextOnFocus = false
+            box.TextColor3 = Color3.fromRGB(230,230,230)
+            box.BackgroundColor3 = Color3.fromRGB(45,45,45)
+            box.BorderSizePixel = 0
+            box.Font = Enum.Font.Gotham
+            box.TextSize = 14
+            box.FocusLost:Connect(function(enter)
+                local txt = box.Text
+                pcall(function() callback(txt) end)
+            end)
+            return box
+        end
+
+        function sectionAPI:Button(label, callback)
+            local btn = Instance.new("TextButton", items)
+            btn.Size = UDim2.new(1,0,0,28)
+            btn.Text = label or "Button"
+            btn.BackgroundColor3 = Color3.fromRGB(50,50,50)
+            btn.TextColor3 = Color3.fromRGB(230,230,230)
+            btn.BorderSizePixel = 0
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 14
+            btn.MouseButton1Click:Connect(function()
+                pcall(function() callback() end)
+            end)
+            return btn
+        end
+
+        function sectionAPI:Label(text)
+            local lbl = createText(items, {Size = UDim2.new(1,0,0,20), Text = text or ""})
+            lbl.TextColor3 = Color3.fromRGB(200,200,200)
+            return lbl
+        end
+
+        return sectionAPI
+    end
+
+    function windowAPI:GreenButton(func)
+        local btn = Instance.new("TextButton", window)
+        btn.Size = UDim2.new(0,120,0,32)
+        btn.Position = UDim2.new(1,-140,1,-44)
+        btn.Text = "Info"
+        btn.BackgroundColor3 = Color3.fromRGB(80,200,120)
+        btn.TextColor3 = Color3.fromRGB(20,20,20)
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 14
+        btn.MouseButton1Click:Connect(function() pcall(func) end)
+        return btn
+    end
+
+    function windowAPI:TempNotify(title, text, asset)
+        -- Use the local notify helper for temporary notifications
+        notify_local((title or "") .. " - " .. (text or ""), 3)
+    end
+
+    return windowAPI
+end
+
+-- ======= Bind UI using WindUI shim =======
+local library_ok, library = pcall(function() return WindUI end)
 if library_ok and library then
     local window = library:init(CONFIG.name, true, CONFIG.uiToggleKey, true)
 
@@ -641,11 +819,11 @@ if library_ok and library then
     sectionC:Label("Target Priority: " .. state.targetPriority)
 else
     -- Library cannot be loaded: fallback to small notifications & console
-    notify_local("Failed to load UI library. Running headless. Use console or enable features in code.", 6)
+    notify_local("Failed to initialize WindUI. Running headless. Use console or enable features in code.", 6)
 end
 
 -- Small console notification
-print(CONFIG.name .. " - ultimate mobile-friendly script loaded. Use the injected UI (AppleLibrary) to control features if available.")
+print(CONFIG.name .. " - ultimate mobile-friendly script loaded. Use the injected UI (WindUI) to control features if available.")
 
 -- Save settings periodically and on exit if possible
 spawn(function()
