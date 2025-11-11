@@ -1,22 +1,14 @@
--- xp;scripts
+-- xp;scripts - integrated with AppleLibrary UI
 -- Ultimate Enhanced ESP + Aimbot (mobile-friendly) — English
--- Features:
---   * ESP (boxes, name, distance), Glow (Highlight), Tracers (lines)
---   * Health bars next to targets
---   * Aimbot with smoothing, FOV circle (rainbow option), target lock (mouse or virtual button)
---   * Team check, Wall check (RaycastParams)
---   * Mobile-friendly UI: larger touch buttons + a persistent floating quick panel
---   * Hotkeys for PC (UI toggle, ESP toggle, Aimbot toggle)
---   * Color presets + per-feature color + rainbow option
---   * Settings save/load (uses writefile/readfile if available, fallback to no persistence)
---   * Target priority modes: Closest, Lowest Health, Closest Visible
---   * Performance-friendly batching & throttling
---   * Graceful fallbacks when Drawing / Highlight / file io not present
---   * Uses CoreGui (protected via syn.protect_gui if available)
-
--- NOTES:
---  * Change default controls in the `CONFIG` table below.
---  * If your exploit doesn't support some APIs (Drawing/Highlight/writefile), related visuals will be skipped.
+-- Notes:
+--  * This version fixes a few bugs (scope issues, accidental 'continue', math.clamp usage,
+--    local variable scoping for box sizes) and removes the in-script CoreGui UI so the
+--    controls are exposed via the external AppleLibrary UI provided at:
+--    https://github.com/GoHamza/AppleLibrary (loaded at runtime).
+--  * All state toggles / numeric inputs are bound to the UI, and settings are saved.
+--  * If the AppleLibrary can't be fetched or an API isn't available (Drawing/Highlight/writefile),
+--    the script gracefully falls back to available features.
+--  * To change default hotkeys or controls, edit the CONFIG table below.
 
 -- ====== Services & Locals ======
 local Players = game:GetService("Players")
@@ -73,6 +65,7 @@ local CONFIG = {
     mobileVirtualAimHoldTimeout = 0.05, -- seconds between aim updates while holding virtual button
     espUpdateInterval = 0.03, -- throttle
     maxESPRendered = 32, -- max players to process fully for performance
+    uiToggleKey = Enum.KeyCode.RightShift, -- UI toggle for external library (for convenience)
 }
 
 local state = {
@@ -113,7 +106,7 @@ if safeIsFile(fileName) then
 end
 
 local function saveSettings()
-    if not CONFIG.saveOnChange then return end
+    if not state.saveOnChange then return end
     local ok, encoded = pcall(function() return HttpService:JSONEncode(state) end)
     if ok then safeWriteFile(fileName, encoded) end
 end
@@ -124,315 +117,7 @@ local function toRGBTable(c)
     return { r = math.floor(c.R*255 + 0.5), g = math.floor(c.G*255 + 0.5), b = math.floor(c.B*255 + 0.5) }
 end
 
--- ====== GUI setup (CoreGui with protection if available) ======
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "XP_SCRIPTS_UI"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-if canProtectGUI then pcall(function() syn.protect_gui(ScreenGui) end) end
-ScreenGui.Parent = game.CoreGui
-
--- main window
-local MainFrame = Instance.new("Frame", ScreenGui)
-MainFrame.Size = UDim2.new(0, 320, 0, 560)
-MainFrame.Position = UDim2.new(0, 16, 0, 64)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18,18,18)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-
-local TitleBar = Instance.new("Frame", MainFrame)
-TitleBar.Size = UDim2.new(1,0,0,40)
-TitleBar.BackgroundColor3 = Color3.fromRGB(255,200,0)
-TitleBar.BorderSizePixel = 0
-
-local Title = Instance.new("TextLabel", TitleBar)
-Title.Text = CONFIG.name .. " • Enhanced Mobile"
-Title.Size = UDim2.new(1,-16,1,0)
-Title.Position = UDim2.new(0,8,0,0)
-Title.BackgroundTransparency = 1
-Title.TextColor3 = Color3.fromRGB(0,0,0)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 14
-Title.TextXAlignment = Enum.TextXAlignment.Left
-
-local ContentFrame = Instance.new("Frame", MainFrame)
-ContentFrame.Position = UDim2.new(0,8,0,48)
-ContentFrame.Size = UDim2.new(1,-16,1,-56)
-ContentFrame.BackgroundTransparency = 1
-
-local UIList = Instance.new("UIListLayout", ContentFrame)
-UIList.Padding = UDim.new(0,8)
-UIList.FillDirection = Enum.FillDirection.Vertical
-UIList.HorizontalAlignment = Enum.HorizontalAlignment.Center
-UIList.VerticalAlignment = Enum.VerticalAlignment.Top
-
-local function createSection(title)
-    local sec = Instance.new("Frame", ContentFrame)
-    sec.Size = UDim2.new(1,0,0,26)
-    sec.BackgroundTransparency = 1
-    local label = Instance.new("TextLabel", sec)
-    label.Text = title
-    label.Size = UDim2.new(1,0,1,0)
-    label.BackgroundTransparency = 1
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Font = Enum.Font.GothamSemibold
-    label.TextColor3 = Color3.fromRGB(255,200,0)
-    label.TextSize = 13
-    return sec
-end
-
-local function createToggle(name, getState, toggleFn)
-    local btn = Instance.new("Frame", ContentFrame)
-    btn.Size = UDim2.new(1,0,0,44)
-    btn.BackgroundColor3 = Color3.fromRGB(36,36,36)
-    btn.BorderSizePixel = 0
-    local corner = Instance.new("UICorner", btn); corner.CornerRadius = UDim.new(0,6)
-    local label = Instance.new("TextLabel", btn)
-    label.Text = name
-    label.Size = UDim2.new(1,-80,1,0)
-    label.Position = UDim2.new(0,8,0,0)
-    label.BackgroundTransparency = 1
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Font = Enum.Font.Gotham
-    label.TextColor3 = Color3.fromRGB(240,240,240)
-    label.TextSize = 14
-    local indicator = Instance.new("TextButton", btn)
-    indicator.Size = UDim2.new(0,64,0,28)
-    indicator.Position = UDim2.new(1,-72,0.5,-14)
-    indicator.Text = getState() and "ON" or "OFF"
-    indicator.AutoButtonColor = false
-    indicator.BackgroundColor3 = getState() and Color3.fromRGB(0,200,0) or Color3.fromRGB(200,0,0)
-    indicator.Font = Enum.Font.GothamBold
-    indicator.TextColor3 = Color3.new(0,0,0)
-    local icorner = Instance.new("UICorner", indicator); icorner.CornerRadius = UDim.new(0,6)
-    indicator.MouseButton1Click:Connect(function()
-        toggleFn()
-        indicator.Text = getState() and "ON" or "OFF"
-        indicator.BackgroundColor3 = getState() and Color3.fromRGB(0,200,0) or Color3.fromRGB(200,0,0)
-        saveSettings()
-    end)
-    indicator.Parent = btn
-    return btn
-end
-
-local function createSlider(name, min, max, default, onChanged)
-    local cont = Instance.new("Frame", ContentFrame)
-    cont.Size = UDim2.new(1,0,0,56)
-    cont.BackgroundColor3 = Color3.fromRGB(36,36,36)
-    cont.BorderSizePixel = 0
-    local corner = Instance.new("UICorner", cont); corner.CornerRadius = UDim.new(0,6)
-    local label = Instance.new("TextLabel", cont)
-    label.Text = name .. ": " .. tostring(default)
-    label.Size = UDim2.new(1,-16,0,20)
-    label.Position = UDim2.new(0,8,0,4)
-    label.BackgroundTransparency = 1
-    label.Font = Enum.Font.Gotham
-    label.TextColor3 = Color3.fromRGB(240,240,240)
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    local bar = Instance.new("Frame", cont)
-    bar.Size = UDim2.new(1,-24,0,8)
-    bar.Position = UDim2.new(0,12,0,32)
-    bar.BackgroundColor3 = Color3.fromRGB(60,60,60)
-    local bcorner = Instance.new("UICorner", bar); bcorner.CornerRadius = UDim.new(0,4)
-    local fill = Instance.new("Frame", bar)
-    fill.Size = UDim2.new((default - min)/(max - min),0,1,0)
-    fill.BackgroundColor3 = Color3.fromRGB(255,200,0)
-    local fcorner = Instance.new("UICorner", fill); fcorner.CornerRadius = UDim.new(0,4)
-    local btn = Instance.new("TextButton", bar)
-    btn.Size = UDim2.new(1,0,1,0)
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    local current = default
-    local dragging
-    local function updateFromInput(input)
-        local pos = clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-        local value = math.floor(min + (max - min) * pos)
-        current = value
-        fill.Size = UDim2.new(pos,0,1,0)
-        label.Text = name .. ": " .. tostring(value)
-        onChanged(value)
-    end
-    btn.MouseButton1Down:Connect(function()
-        dragging = UserInputService.InputChanged:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseMovement then updateFromInput(inp) end
-        end)
-    end)
-    UserInputService.InputEnded:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1 and dragging then dragging:Disconnect() end
-    end)
-    return cont, function() return current end
-end
-
--- Build UI controls
-createSection("VISUAL")
-createToggle("ESP", function() return state.espEnabled end, function() state.espEnabled = not state.espEnabled end)
-createToggle("Glow (Highlight)", function() return state.glowEnabled end, function() state.glowEnabled = not state.glowEnabled end)
-createToggle("Tracers (Lines)", function() return state.tracersEnabled end, function() state.tracersEnabled = not state.tracersEnabled end)
-createToggle("Health Bars", function() return state.healthBarsEnabled end, function() state.healthBarsEnabled = not state.healthBarsEnabled end)
-createToggle("Team Check", function() return state.teamCheck end, function() state.teamCheck = not state.teamCheck end)
-createToggle("Wall Check (Raycast)", function() return state.wallCheck end, function() state.wallCheck = not state.wallCheck end)
-
-createSection("AIMBOT")
-createToggle("Aimbot", function() return state.aimbotEnabled end, function() state.aimbotEnabled = not state.aimbotEnabled end)
-createToggle("Show FOV", function() return state.showFov end, function() state.showFov = not state.showFov end)
-createToggle("FOV Rainbow", function() return state.fovRainbow end, function() state.fovRainbow = not state.fovRainbow end)
-createToggle("Rainbow ESP", function() return state.rainbowESP end, function() state.rainbowESP = not state.rainbowESP end)
-createToggle("Rainbow Glow", function() return state.rainbowGlow end, function() state.rainbowGlow = not state.rainbowGlow end)
-
-local fovSlider, getFov = createSlider("FOV Radius", 50, 700, state.fovRadius, function(v) state.fovRadius = v if fovCircle then fovCircle.Radius = v end saveSettings() end)
-local smoothSlider, getSmooth = createSlider("Aimbot Smoothness (0-10)", 0, 10, math.floor(state.smoothingFactor*10), function(v) state.smoothingFactor = v/10 saveSettings() end)
-
-createSection("TARGET / PRIORITY")
--- Simple target selector UI (small cycle button)
-local priorityFrame = Instance.new("Frame", ContentFrame)
-priorityFrame.Size = UDim2.new(1,0,0,44)
-priorityFrame.BackgroundColor3 = Color3.fromRGB(36,36,36)
-local pcorner = Instance.new("UICorner", priorityFrame); pcorner.CornerRadius = UDim.new(0,6)
-local pLabel = Instance.new("TextLabel", priorityFrame)
-pLabel.Text = "Target Priority: " .. state.targetPriority
-pLabel.Size = UDim2.new(1,-100,1,0)
-pLabel.Position = UDim2.new(0,8,0,0)
-pLabel.BackgroundTransparency = 1
-pLabel.Font = Enum.Font.Gotham
-pLabel.TextColor3 = Color3.fromRGB(240,240,240)
-pLabel.TextXAlignment = Enum.TextXAlignment.Left
-local pBtn = Instance.new("TextButton", priorityFrame)
-pBtn.Size = UDim2.new(0,80,0,28)
-pBtn.Position = UDim2.new(1,-88,0.5,-14)
-pBtn.Text = "Cycle"
-pBtn.BackgroundColor3 = Color3.fromRGB(255,200,0)
-pBtn.Font = Enum.Font.GothamBold
-pBtn.TextColor3 = Color3.new(0,0,0)
-local listPriority = {"Closest","LowestHealth","ClosestVisible"}
-pBtn.MouseButton1Click:Connect(function()
-    for i,v in ipairs(listPriority) do
-        if v == state.targetPriority then
-            state.targetPriority = listPriority[i % #listPriority + 1]
-            break
-        end
-    end
-    pLabel.Text = "Target Priority: " .. state.targetPriority
-    saveSettings()
-end)
-
-createSection("COLORS & PRESETS")
--- Simple color presets (3 presets) for ESP / Glow / FOV
-local function createColorPresetRow(labelText, key)
-    local row = Instance.new("Frame", ContentFrame)
-    row.Size = UDim2.new(1,0,0,40)
-    row.BackgroundColor3 = Color3.fromRGB(36,36,36)
-    local corner = Instance.new("UICorner", row); corner.CornerRadius = UDim.new(0,6)
-    local lbl = Instance.new("TextLabel", row)
-    lbl.Text = labelText
-    lbl.Size = UDim2.new(1,-160,1,0)
-    lbl.Position = UDim2.new(0,8,0,0)
-    lbl.BackgroundTransparency = 1
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextColor3 = Color3.fromRGB(240,240,240)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    local presets = {
-        {r=255,g=255,b=255},
-        {r=255,g=0,b=0},
-        {r=0,g=200,b=255}
-    }
-    local xPos = 0
-    for i,p in ipairs(presets) do
-        local btn = Instance.new("TextButton", row)
-        btn.Size = UDim2.new(0,36,0,26)
-        btn.Position = UDim2.new(1, -44 - xPos, 0.5, -13)
-        btn.BackgroundColor3 = rgb(p)
-        local bcorner = Instance.new("UICorner", btn); bcorner.CornerRadius = UDim.new(0,6)
-        btn.MouseButton1Click:Connect(function()
-            state.colorPresets[key] = p
-            saveSettings()
-        end)
-        xPos = xPos + 44
-    end
-    -- rainbow toggle small button
-    local rainBtn = Instance.new("TextButton", row)
-    rainBtn.Size = UDim2.new(0,60,0,26)
-    rainBtn.Position = UDim2.new(1, -108, 0.5, -13)
-    rainBtn.BackgroundColor3 = Color3.fromRGB(80,80,80)
-    rainBtn.Text = "Rainbow"
-    rainBtn.Font = Enum.Font.Gotham
-    rainBtn.TextColor3 = Color3.fromRGB(240,240,240)
-    local rc = Instance.new("UICorner", rainBtn); rc.CornerRadius = UDim.new(0,6)
-    rainBtn.MouseButton1Click:Connect(function()
-        if key == "esp" then state.rainbowESP = not state.rainbowESP
-        elseif key == "glow" then state.rainbowGlow = not state.rainbowGlow
-        else state.fovRainbow = not state.fovRainbow end
-        saveSettings()
-    end)
-    return row
-end
-
-createColorPresetRow("ESP Color", "esp")
-createColorPresetRow("Glow Color", "glow")
-createColorPresetRow("FOV Color", "fov")
-
--- Small instructions
-local instr = Instance.new("TextLabel", ContentFrame)
-instr.Size = UDim2.new(1,0,0,42)
-instr.BackgroundTransparency = 1
-instr.Text = "Mobile: use the floating quick panel (bottom-right) to toggle ESP/AIM/Glow and hold the Aim button to target.\nPC: RightCtrl = UI, F1 = ESP, F2 = Aimbot, F3 = Glow."
-instr.TextSize = 12
-instr.TextColor3 = Color3.fromRGB(200,200,200)
-instr.Font = Enum.Font.Gotham
-instr.TextXAlignment = Enum.TextXAlignment.Left
-instr.TextWrapped = true
-
--- Floating quick panel for mobile (touch-friendly)
-local QuickPanel = Instance.new("Frame", ScreenGui)
-QuickPanel.Size = UDim2.new(0,120,0,140)
-QuickPanel.Position = UDim2.new(1,-140,1,-180)
-QuickPanel.BackgroundTransparency = 0.15
-QuickPanel.BackgroundColor3 = Color3.fromRGB(24,24,24)
-QuickPanel.BorderSizePixel = 0
-local qpCorner = Instance.new("UICorner", QuickPanel); qpCorner.CornerRadius = UDim.new(0,10)
-
-local function makeQPButton(text, y, callback)
-    local b = Instance.new("TextButton", QuickPanel)
-    b.Size = UDim2.new(1,-12,0,36)
-    b.Position = UDim2.new(0,6,0,y)
-    b.BackgroundColor3 = Color3.fromRGB(70,70,70)
-    b.Text = text
-    b.Font = Enum.Font.GothamBold
-    b.TextColor3 = Color3.new(1,1,1)
-    local c = Instance.new("UICorner", b); c.CornerRadius = UDim.new(0,8)
-    b.AutoButtonColor = true
-    b.TouchTapSupported = true
-    b.MouseButton1Click:Connect(function() callback(b) end)
-    return b
-end
-
-makeQPButton("ESP", 6, function() state.espEnabled = not state.espEnabled saveSettings() end)
-makeQPButton("AIM", 46, function() state.aimbotEnabled = not state.aimbotEnabled saveSettings() end)
-makeQPButton("GLOW", 86, function() state.glowEnabled = not state.glowEnabled saveSettings() end)
-
--- Virtual aim hold button (for mobile) — press & hold to aim
-local AimHoldBtn = Instance.new("TextButton", QuickPanel)
-AimHoldBtn.Size = UDim2.new(1,-12,0,36)
-AimHoldBtn.Position = UDim2.new(0,6,0,126)
-AimHoldBtn.BackgroundColor3 = Color3.fromRGB(200,40,40)
-AimHoldBtn.Text = "HOLD AIM"
-AimHoldBtn.Font = Enum.Font.GothamBold
-AimHoldBtn.TextColor3 = Color3.new(0,0,0)
-AimHoldBtn.AutoButtonColor = false
-local aimCorner = Instance.new("UICorner", AimHoldBtn); aimCorner.CornerRadius = UDim.new(0,8)
-local aimHeld = false
-AimHoldBtn.TouchLongPressDistance = 0
-
-AimHoldBtn.MouseButton1Down:Connect(function()
-    aimHeld = true
-end)
-AimHoldBtn.MouseButton1Up:Connect(function()
-    aimHeld = false
-end)
--- For touch end
-AimHoldBtn.TouchEnded:Connect(function() aimHeld = false end)
-
--- ========== Drawing objects & caches ==========
+-- ====== Drawing objects & caches (no embedded in-script GUI) ==========
 local espObjects = {}   -- player -> {box, name, distance, healthbar, tracer}
 local glowObjects = {}  -- player -> list of highlights
 local fovCircle = nil
@@ -500,9 +185,14 @@ local function canSee(part)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {LocalPlayer.Character}
-    local result = Workspace:Raycast(origin, direction.Unit * math.min(direction.Magnitude, 2000), params)
-    if not result then return true end
-    return result.Instance:IsDescendantOf(part.Parent)
+    local ok, result = pcall(function()
+        return Workspace:Raycast(origin, direction.Unit * math.min(direction.Magnitude, 2000), params)
+    end)
+    if not ok or not result then return true end
+    if result.Instance and result.Instance:IsDescendantOf(part.Parent) then
+        return true
+    end
+    return false
 end
 
 -- ======= Glow (Highlight) management =======
@@ -515,7 +205,13 @@ local function updateGlowFor(player)
         return
     end
     if player == LocalPlayer then return end
-    if state.teamCheck and player.Team == LocalPlayer.Team then return end
+    if state.teamCheck and player.Team == LocalPlayer.Team then
+        if glowObjects[player] then
+            for _,h in pairs(glowObjects[player]) do pcall(function() if h and h.Parent then h:Destroy() end end) end
+            glowObjects[player] = nil
+        end
+        return
+    end
     local char = player.Character
     if not char then
         if glowObjects[player] then
@@ -550,8 +246,8 @@ local function screenInfo(pos)
 end
 
 local function screenDistanceFromCenter(pos)
-    local screenPos, onScreen = Camera:WorldToViewportPoint(pos)
-    local v2 = Vector2.new(screenPos.X, screenPos.Y)
+    local screenPos3, onScreen = Camera:WorldToViewportPoint(pos)
+    local v2 = Vector2.new(screenPos3.X, screenPos3.Y)
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
     return (v2 - center).Magnitude, onScreen == true, v2
 end
@@ -560,11 +256,14 @@ local function collectCandidates()
     local list = {}
     for _,player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(state.targetPart) then
-            if state.teamCheck and player.Team == LocalPlayer.Team then continue end
-            local part = player.Character[state.targetPart]
-            if part then
-                local distCenter, onScreen, screenPos = screenDistanceFromCenter(part.Position)
-                table.insert(list, {player=player, part=part, distCenter=distCenter, onScreen=onScreen, screenPos=screenPos})
+            if state.teamCheck and player.Team == LocalPlayer.Team then
+                -- skip teammates when teamCheck is enabled
+            else
+                local part = player.Character[state.targetPart]
+                if part then
+                    local distCenter, onScreen, screenPos = screenDistanceFromCenter(part.Position)
+                    table.insert(list, {player=player, part=part, distCenter=distCenter, onScreen=onScreen, screenPos=screenPos})
+                end
             end
         end
     end
@@ -588,8 +287,8 @@ local function chooseTarget()
 
     if state.targetPriority == "LowestHealth" then
         table.sort(filtered, function(a,b)
-            local ah = a.player.Character:FindFirstChildOfClass("Humanoid")
-            local bh = b.player.Character:FindFirstChildOfClass("Humanoid")
+            local ah = a.player.Character and a.player.Character:FindFirstChildOfClass("Humanoid")
+            local bh = b.player.Character and b.player.Character:FindFirstChildOfClass("Humanoid")
             local av = ah and ah.Health or 9999
             local bv = bh and bh.Health or 9999
             return av < bv
@@ -607,7 +306,7 @@ local function smoothLookAt(target)
     local goal = CFrame.new(Camera.CFrame.Position, target.Position)
     local alpha = 1 - state.smoothingFactor -- 0..1, where 1 is instant
     alpha = clamp(alpha, 0, 1)
-    if alpha == 1 then
+    if alpha >= 1 then
         Camera.CFrame = goal
     else
         Camera.CFrame = start:Lerp(goal, alpha)
@@ -677,16 +376,19 @@ local function updateESP(dt)
                 local screenPos3, onScreen = Camera:WorldToViewportPoint(target.Position)
                 local screenPos = Vector2.new(screenPos3.X, screenPos3.Y)
                 local visible = canSee(target)
-                if onScreen and ((not state.teamCheck) or player.Team ~= LocalPlayer.Team) and (not state.teamCheck or player.Team ~= LocalPlayer.Team) then
+                if onScreen and (not state.teamCheck or player.Team ~= LocalPlayer.Team) then
                     if draws then
                         -- color handling
                         local espColor = state.rainbowESP and Color3.fromHSV(state.hue, 1, 1) or rgb(state.colorPresets.esp)
                         local tracerColor = espColor
                         local glowColor = state.rainbowGlow and Color3.fromHSV(state.hue, 1, 1) or rgb(state.colorPresets.glow)
+
+                        -- compute box sizes in a scope visible to healthbar code
+                        local sizeScale = clamp(1 / (screenPos3.Z * 0.002 + 0.001), 0.5, 3)
+                        local boxW = 40 * sizeScale
+                        local boxH = 80 * sizeScale
+
                         if draws.box then
-                            local sizeScale = math.clamp(1 / (screenPos3.Z * 0.002 + 0.001), 0.5, 3)
-                            local boxW = 40 * sizeScale
-                            local boxH = 80 * sizeScale
                             draws.box.Size = Vector2.new(boxW, boxH)
                             draws.box.Position = Vector2.new(screenPos.X - boxW/2, screenPos.Y - boxH/2 - 20)
                             draws.box.Color = espColor
@@ -721,7 +423,7 @@ local function updateESP(dt)
                             local healthPerc = 0
                             if hum and hum.MaxHealth > 0 then healthPerc = clamp(hum.Health / hum.MaxHealth, 0, 1) end
                             local barW = 6
-                            local barH = 60 * (math.clamp(1/(screenPos3.Z*0.002 + 0.001),0.6,2))
+                            local barH = 60 * (clamp(1/(screenPos3.Z*0.002 + 0.001),0.6,2))
                             local x = screenPos.X - (boxW/2) - 12
                             local y = screenPos.Y - barH/2 - 20
                             draws.healthBack.Position = Vector2.new(x, y)
@@ -755,6 +457,7 @@ end
 -- ======= Main RenderStepped loop =======
 local aimTick = 0
 local aimHold = false
+local aimHeld = false -- mobile hold flag
 
 RunService.RenderStepped:Connect(function(dt)
     -- update hue for rainbow effects
@@ -763,9 +466,6 @@ RunService.RenderStepped:Connect(function(dt)
     end
 
     updateESP(dt)
-
-    -- mobile virtual aim: if aimHeld true -> act like mouse is pressed
-    if aimHeld then aimHold = true else aimHold = false end
 
     -- PC mouse hold check for aimbot
     local mouseHold = UserInputService:IsMouseButtonPressed(CONFIG.aimMouseButton)
@@ -777,6 +477,8 @@ RunService.RenderStepped:Connect(function(dt)
             local target = chooseTarget()
             if target then smoothLookAt(target) end
         end
+    else
+        aimTick = 0
     end
 end)
 
@@ -786,9 +488,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
     if input.UserInputType == Enum.UserInputType.Keyboard then
         local kc = input.KeyCode
         if kc == CONFIG.hotkeys.toggleUI then
+            -- Toggle visibility is managed by external UI (AppleLibrary). We still toggle state flag.
             state.uiVisible = not state.uiVisible
-            MainFrame.Visible = state.uiVisible
-            QuickPanel.Visible = state.uiVisible
             saveSettings()
         elseif kc == CONFIG.hotkeys.toggleESP then
             state.espEnabled = not state.espEnabled; saveSettings()
@@ -800,46 +501,151 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
--- Prevent accidental toggles on mobile touches in UI (processed variable)
-UserInputService.InputBegan:Connect(function(input, processed)
-    if input.UserInputType == Enum.UserInputType.Touch and not processed then
-        -- optional: open quick panel on double-tap, etc.
-    end
-end)
-
--- ======= Player join/remove cleanup =======
-Players.PlayerAdded:Connect(function(p) createESP(p) end)
-Players.PlayerRemoving:Connect(function(p) removeESP(p) end)
-
--- ======= Notification helper =======
-local function notify(text, duration)
+-- ======= Notification helper (local) =======
+local function notify_local(text, duration)
     duration = duration or 3
-    local notif = Instance.new("Frame", ScreenGui)
-    notif.Size = UDim2.new(0,320,0,60)
-    notif.Position = UDim2.new(1,-340,0,20)
-    notif.BackgroundColor3 = Color3.fromRGB(18,18,18)
-    notif.BorderSizePixel = 0
-    local corner = Instance.new("UICorner", notif); corner.CornerRadius = UDim.new(0,8)
-    local bar = Instance.new("Frame", notif)
-    bar.Size = UDim2.new(0.02,0,1,0)
-    bar.BackgroundColor3 = Color3.fromRGB(255,200,0)
-    bar.BorderSizePixel = 0
-    local label = Instance.new("TextLabel", notif)
-    label.Size = UDim2.new(1,-16,1,0)
-    label.Position = UDim2.new(0.02,8,0,0)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.Font = Enum.Font.GothamSemibold
-    label.TextColor3 = Color3.fromRGB(230,230,230)
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    TweenService:Create(notif, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(1,-340,0,20)}):Play()
-    task.delay(duration, function()
-        TweenService:Create(notif, TweenInfo.new(0.35), {Position = UDim2.new(1,50,0,20)}):Play()
-        task.delay(0.35, function() pcall(function() notif:Destroy() end) end)
+    -- If TweenService and CoreGui available, make a small notif. Keep it simple & safe.
+    local ok, success = pcall(function()
+        local notif = Instance.new("Frame")
+        notif.Size = UDim2.new(0,320,0,60)
+        notif.Position = UDim2.new(1,-340,0,20)
+        notif.BackgroundColor3 = Color3.fromRGB(18,18,18)
+        notif.BorderSizePixel = 0
+        local corner = Instance.new("UICorner", notif); corner.CornerRadius = UDim.new(0,8)
+        local bar = Instance.new("Frame", notif)
+        bar.Size = UDim2.new(0.02,0,1,0)
+        bar.BackgroundColor3 = Color3.fromRGB(255,200,0)
+        bar.BorderSizePixel = 0
+        local label = Instance.new("TextLabel", notif)
+        label.Size = UDim2.new(1,-16,1,0)
+        label.Position = UDim2.new(0.02,8,0,0)
+        label.BackgroundTransparency = 1
+        label.Text = text
+        label.Font = Enum.Font.GothamSemibold
+        label.TextColor3 = Color3.fromRGB(230,230,230)
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        notif.Parent = game.CoreGui
+        TweenService:Create(notif, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(1,-340,0,20)}):Play()
+        task.delay(duration, function()
+            TweenService:Create(notif, TweenInfo.new(0.35), {Position = UDim2.new(1,50,0,20)}):Play()
+            task.delay(0.35, function() pcall(function() notif:Destroy() end) end)
+        end)
     end)
+    -- fallback to print
+    if not ok then
+        print(text)
+    end
 end
 
-notify(CONFIG.name .. " loaded — mobile friendly mode active", 4)
+-- Try to load AppleLibrary UI and bind controls
+local library_ok, library = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/GoHamza/AppleLibrary/blob/main/main.lua?raw=true"))()
+end)
+
+if library_ok and library then
+    local window = library:init(CONFIG.name, true, CONFIG.uiToggleKey, true)
+
+    window:Divider("XP Scripts • Enhanced ESP + Aimbot")
+
+    local sectionA = window:Section("Visual")
+    sectionA:Switch("ESP", state.espEnabled, function(val)
+        state.espEnabled = val; saveSettings()
+    end)
+    sectionA:Switch("Glow (Highlight)", state.glowEnabled, function(val)
+        state.glowEnabled = val; saveSettings()
+    end)
+    sectionA:Switch("Tracers (Lines)", state.tracersEnabled, function(val)
+        state.tracersEnabled = val; saveSettings()
+    end)
+    sectionA:Switch("Health Bars", state.healthBarsEnabled, function(val)
+        state.healthBarsEnabled = val; saveSettings()
+    end)
+    sectionA:Switch("Team Check", state.teamCheck, function(val)
+        state.teamCheck = val; saveSettings()
+    end)
+    sectionA:Switch("Wall Check (Raycast)", state.wallCheck, function(val)
+        state.wallCheck = val; saveSettings()
+    end)
+
+    window:Divider("Aimbot")
+    local sectionB = window:Section("Aimbot")
+    sectionB:Switch("Aimbot", state.aimbotEnabled, function(val) state.aimbotEnabled = val; saveSettings() end)
+    sectionB:Switch("Show FOV", state.showFov, function(val) state.showFov = val; if fovCircle then fovCircle.Visible = state.showFov end saveSettings() end)
+    sectionB:Switch("FOV Rainbow", state.fovRainbow, function(val) state.fovRainbow = val; saveSettings() end)
+    sectionB:Switch("Rainbow ESP", state.rainbowESP, function(val) state.rainbowESP = val; saveSettings() end)
+    sectionB:Switch("Rainbow Glow", state.rainbowGlow, function(val) state.rainbowGlow = val; saveSettings() end)
+
+    sectionB:TextField("FOV Radius (50-700)", tostring(state.fovRadius), function(txt)
+        local n = tonumber(txt)
+        if n then state.fovRadius = clamp(n, 50, 700); if fovCircle then fovCircle.Radius = state.fovRadius end saveSettings() end
+    end)
+    sectionB:TextField("Aimbot Smoothness 0-1 (0 = instant)", tostring(state.smoothingFactor), function(txt)
+        local n = tonumber(txt)
+        if n then state.smoothingFactor = clamp(n, 0, 1); saveSettings() end
+    end)
+
+    window:Divider("Target / Priority")
+    local sectionC = window:Section("Target")
+    sectionC:Button("Cycle Priority", function()
+        local listPriority = {"Closest","LowestHealth","ClosestVisible"}
+        for i,v in ipairs(listPriority) do
+            if v == state.targetPriority then
+                state.targetPriority = listPriority[i % #listPriority + 1]
+                break
+            end
+        end
+        sectionC:Label("Target Priority: " .. state.targetPriority)
+        saveSettings()
+    end)
+    sectionC:TextField("Target Part (Head/UpperTorso/Root)", state.targetPart, function(txt)
+        if txt and #txt > 0 then state.targetPart = txt; saveSettings() end
+    end)
+
+    window:Divider("Colors & Presets")
+    local sectionD = window:Section("Colors")
+    sectionD:Button("ESP White Preset", function()
+        state.colorPresets.esp = {r=255,g=255,b=255}; saveSettings()
+    end)
+    sectionD:Button("ESP Cyan Preset", function()
+        state.colorPresets.esp = {r=0,g=200,b=255}; saveSettings()
+    end)
+    sectionD:Button("Glow Red Preset", function()
+        state.colorPresets.glow = {r=255,g=0,b=0}; saveSettings()
+    end)
+    sectionD:Button("FOV Orange Preset", function()
+        state.colorPresets.fov = {r=255,g=200,b=0}; if fovCircle then fovCircle.Color = rgb(state.colorPresets.fov) end saveSettings()
+    end)
+
+    window:Divider("Misc")
+    local sectionE = window:Section("Misc")
+    sectionE:Button("Save Settings Now", function() saveSettings(); window:TempNotify("Saved", "Settings saved to file (if supported).", "rbxassetid://12608259004") end)
+    sectionE:Button("Reset Settings", function()
+        -- lightweight reset
+        state.espEnabled = false
+        state.glowEnabled = false
+        state.aimbotEnabled = false
+        state.teamCheck = false
+        state.wallCheck = false
+        state.fovRadius = 150
+        state.smoothingFactor = 0.5
+        state.rainbowESP = false
+        state.rainbowGlow = false
+        state.fovRainbow = false
+        saveSettings()
+        window:TempNotify("Reset", "Settings reset to defaults.", "rbxassetid://12608259004")
+    end)
+
+    window:GreenButton(function() notify_local(CONFIG.name .. " - controls available in the UI") end)
+
+    -- initial label to show priority
+    sectionC:Label("Target Priority: " .. state.targetPriority)
+else
+    -- Library cannot be loaded: fallback to small notifications & console
+    notify_local("Failed to load UI library. Running headless. Use console or enable features in code.", 6)
+end
+
+-- Small console notification
+print(CONFIG.name .. " - ultimate mobile-friendly script loaded. Use the injected UI (AppleLibrary) to control features if available.")
 
 -- Save settings periodically and on exit if possible
 spawn(function()
@@ -848,8 +654,3 @@ spawn(function()
         saveSettings()
     end
 end)
-
--- Final note printed to console (safe)
-print(CONFIG.name .. " - ultimate mobile-friendly script loaded. Use Quick Panel at bottom-right for touch toggles.")
-
--- ======= End of script =======
