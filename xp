@@ -402,30 +402,4 @@ local function createESP(player)
     local box = Drawing.new("Square")
     box.Visible = false
     box.Color = Color3.new(1, 1, 1)
-    box.Thickness = 1
-    box.Transparency = 1
-    box.Filled = false
-
-    -- Player name
-    local nameTag = Drawing.new("Text")
-    nameTag.Visible = false
-    nameTag.Center = true
-    nameTag.Outline = true
-    nameTag.Font = 2
-    nameTag.Size = 14
-    nameTag.Color = Color3.new(1, 1, 1)
-
-    -- Distance
-    local distanceText = Drawing.new("Text")
-    distanceText.Visible = false
-    distanceText.Center = true
-    distanceText.Outline = true
-    distanceText.Font = 2
-    distanceText.Size = 12
-    distanceText.Color = Color3.new(1, 1, 1)
-
-    espObjects[player] = {
-        box = box,
-        nameTag = nameTag,
-        distanceText = distanceText
-    }
+    box.Thickness
